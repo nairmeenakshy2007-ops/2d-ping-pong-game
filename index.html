@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Realistic Table Tennis - Single Player</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #0b0f19;
+      color: #f8fafc;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 24px;
+      letter-spacing: 3px;
+      margin-bottom: 4px;
+      color: #38bdf8;
+      text-transform: uppercase;
+    }
+
+    .instructions {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 16px;
+    }
+
+    .game-container {
+      position: relative;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 2px solid #1e293b;
+    }
+
+    canvas {
+      display: block;
+      background-color: #0f172a;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Table Tennis Pro</h1>
+  <p class="instructions">Use <strong>W / S</strong> or <strong>UP / DOWN</strong> arrows to control your paddle</p>
+
+  <div class="game-container">
+    <canvas id="pongCanvas" width="900" height="520"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('pongCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- SOUND SYNTHESIZER (Web Audio API - Pure JS) ---
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    function playHitSound(freq = 300, duration = 0.05) {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    // --- GAME CONFIGURATION & CONSTANTS ---
+    const TABLE = {
+      x: 80,
+      y: 120,
+      width: 740,
+      height: 320,
+      color: '#0284c7',
+      borderColor: '#15803d'
+    };
+
+    const PADDLE_WIDTH = 14;
+    const PADDLE_HEIGHT = 75;
+    const BALL_RADIUS = 8;
+    const PLAYER_SPEED = 6.5;
+    const AI_SPEED = 4.8;
+    const GRAVITY = 0.18;
+
+    const keysPressed = {};
+    const particles = [];
+
+    // --- GAME OBJECTS ---
+    const player = {
+      x: TABLE.x + 10,
+      y: TABLE.y + TABLE.height / 2 - PADDLE_HEIGHT / 2,
+      width: PADDLE_WIDTH,
+      height: PADDLE_HEIGHT,
+      score: 0,
+      vy: 0
+    };
+
+    const ai = {
+      x: TABLE.x + TABLE.width - 10 - PADDLE_WIDTH,
+      y: TABLE.y + TABLE.height / 2 - PADDLE_HEIGHT / 2,
+      width: PADDLE_WIDTH,
+      height: PADDLE_HEIGHT,
+      score: 0
+    };
+
+    const ball = {
+      x: canvas.width / 2,
+      y: TABLE.y + TABLE.height / 2,
+      z: 0,            // Simulated vertical arc height
+      vz: 0,           // Vertical velocity
+      radius: BALL_RADIUS,
+      dx: 6,
+      dy: 0,
+      spin: 0,         // Spin effect
+      speed: 6.5
+    };
+// --- TIMER & GAME STATE ---
+let timeLeft = 60; // 60 seconds
+let gameOver = false;
+let winnerText = '';
+
+// Countdown timer every second
+const timerInterval = setInterval(() => {
+  if (timeLeft > 0) {
+    timeLeft--;
+  } else {
+    gameOver = true;
+    clearInterval(timerInterval);
+    
+    // Determine winner when time runs out
+    if (player.score > ai.score) {
+      winnerText = 'PLAYER IS THE WINNER!';
+    } else if (ai.score > player.score) {
+      winnerText = 'AI OPPONENT IS THE WINNER!';
+    } else {
+      winnerText = "IT'S A DRAW!";
+    }
+  }
+}, 1000);
+    // Input Handling
+    window.addEventListener('keydown', (e) => keysPressed[e.key] = true);
+    window.addEventListener('keyup', (e) => keysPressed[e.key] = false);
+
+    function createParticles(x, y, color, count = 8) {
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x: x,
+          y: y,
+          vx: (Math.random() - 0.5) * 4,
+          vy: (Math.random() - 0.5) * 4,
+          alpha: 1,
+          color: color
+        });
+      }
+    }
+
+    function resetBall(directionTo) {
+      ball.x = TABLE.x + TABLE.width / 2;
+      ball.y = TABLE.y + TABLE.height / 2;
+      ball.z = 20;
+      ball.vz = 2;
+      ball.spin = 0;
+      ball.speed = 6.5;
+
+      const angle = (Math.random() * Math.PI / 4) - (Math.PI / 8);
+      ball.dx = directionTo * ball.speed * Math.cos(angle);
+      ball.dy = ball.speed * Math.sin(angle);
+    }
+
+    // Manual AABB Collision Detection
+    function checkCircleBoxCollision(circle, box) {
+      const closestX = Math.max(box.x, Math.min(circle.x, box.x + box.width));
+      const closestY = Math.max(box.y, Math.min(circle.y, box.y + box.height));
+      const distanceX = circle.x - closestX;
+      const distanceY = circle.y - closestY;
+      return (distanceX * distanceX + distanceY * distanceY) < (circle.radius * circle.radius);
+    }
+
+    // --- UPDATE LOOP ---
+  function update() {
+    if (gameOver) return; // Stop updating physics when game ends
+  
+  
+      // 1. Move Player
+      let lastPlayerY = player.y;
+      if (keysPressed['w'] || keysPressed['W'] || keysPressed['ArrowUp']) {
+        player.y -= PLAYER_SPEED;
+      }
+      if (keysPressed['s'] || keysPressed['S'] || keysPressed['ArrowDown']) {
+        player.y += PLAYER_SPEED;
+      }
+      player.y = Math.max(TABLE.y, Math.min(TABLE.y + TABLE.height - player.height, player.y));
+      player.vy = player.y - lastPlayerY; // Velocity used for imparting spin
+
+      // 2. Move AI Opponent
+      const aiCenter = ai.y + (ai.height / 2);
+      if (aiCenter < ball.y - 12) {
+        ai.y += AI_SPEED;
+      } else if (aiCenter > ball.y + 12) {
+        ai.y -= AI_SPEED;
+      }
+      ai.y = Math.max(TABLE.y, Math.min(TABLE.y + TABLE.height - ai.height, ai.y));
+
+      // 3. Move Ball Physics & Apply Spin Trajectory Curve
+      ball.dy += ball.spin * 0.05; // Curve trajectory based on spin
+      ball.x += ball.dx;
+      ball.y += ball.dy;
+
+      // Simulated Vertical Jump Arc
+      ball.z += ball.vz;
+      ball.vz -= GRAVITY;
+      if (ball.z <= 0) {
+        ball.z = 0;
+        ball.vz = -ball.vz * 0.75; // Bounce attenuation
+        if (Math.abs(ball.vz) > 0.5) playHitSound(180, 0.03); // Table bounce sound
+      }
+
+      // Table Boundary Bounces (Top & Bottom Edge Realism)
+      if (ball.y - ball.radius <= TABLE.y) {
+        ball.y = TABLE.y + ball.radius;
+        ball.dy = -ball.dy;
+        playHitSound(250, 0.04);
+      } else if (ball.y + ball.radius >= TABLE.y + TABLE.height) {
+        ball.y = TABLE.y + TABLE.height - ball.radius;
+        ball.dy = -ball.dy;
+        playHitSound(250, 0.04);
+      }
+
+      // 4. Paddle Hit Dynamics
+      let activePaddle = null;
+      let hitDirection = 1;
+
+      if (ball.dx < 0 && checkCircleBoxCollision(ball, player)) {
+        activePaddle = player;
+        hitDirection = 1;
+        ball.spin = player.vy * 0.5; // Impart spin from paddle motion
+      } else if (ball.dx > 0 && checkCircleBoxCollision(ball, ai)) {
+        activePaddle = ai;
+        hitDirection = -1;
+        ball.spin = (Math.random() - 0.5) * 2;
+      }
+
+      if (activePaddle) {
+        const paddleCenter = activePaddle.y + (activePaddle.height / 2);
+        const hitOffset = (ball.y - paddleCenter) / (activePaddle.height / 2);
+        const clampedOffset = Math.max(-1, Math.min(1, hitOffset));
+        const bounceAngle = clampedOffset * (Math.PI / 3.2);
+
+        ball.speed = Math.min(ball.speed + 0.35, 15);
+        ball.dx = hitDirection * ball.speed * Math.cos(bounceAngle);
+        ball.dy = ball.speed * Math.sin(bounceAngle);
+        ball.vz = 3 + Math.abs(clampedOffset) * 2; // Hit arc bounce
+
+        if (hitDirection === 1) {
+          ball.x = player.x + player.width + ball.radius;
+        } else {
+          ball.x = ai.x - ball.radius;
+        }
+
+        playHitSound(450, 0.06);
+        createParticles(ball.x, ball.y, hitDirection === 1 ? '#38bdf8' : '#f43f5e');
+      }
+
+      // 5. Scoring & Ball Reset
+if (ball.x < TABLE.x - 30) {
+  ai.score++;
+  playHitSound(120, 0.2);
+  resetBall(1); // Ball travels toward AI (who just scored)
+} else if (ball.x > TABLE.x + TABLE.width + 30) {
+  player.score++;
+  playHitSound(600, 0.2);
+  resetBall(-1); // Ball travels toward Player (who just scored)
+}
+
+      // Update particle effects
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.04;
+        if (p.alpha <= 0) particles.splice(i, 1);
+      }
+    }
+
+    // --- RENDERING ---
+    function render() {
+// Background
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw Timer 
+      ctx.fillStyle = timeLeft <= 10 ? '#ef4444' : '#f8fafc';
+      ctx.font = '700 24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`TIME: ${timeLeft}s`, canvas.width / 2, 40);
+
+  // Render Table Surface
+      ctx.fillStyle = TABLE.color;
+      ctx.fillRect(TABLE.x, TABLE.y, TABLE.width, TABLE.height);
+      ctx.stroke();
+
+      // Net Shadow & Net Line
+      ctx.strokeStyle = '#020617';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(TABLE.x + TABLE.width / 2, TABLE.y - 10);
+      ctx.lineTo(TABLE.x + TABLE.width / 2, TABLE.y + TABLE.height + 10);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#f8fafc';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Draw Scores
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '700 32px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(player.score, canvas.width / 4, 65);
+      ctx.fillText(ai.score, (3 * canvas.width) / 4, 65);
+
+      ctx.font = '12px sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('PLAYER', canvas.width / 4, 85);
+      ctx.fillText('AI OPPONENT', (3 * canvas.width) / 4, 85);
+
+      // Render Particles
+      particles.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, 4, 4);
+        ctx.restore();
+      });
+
+      // Render Player Paddle (Red Ping Pong Rubber)
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+      ctx.fillStyle = '#991b1b';
+      ctx.fillRect(player.x - 3, player.y, 3, player.height);
+
+      // Render AI Paddle (Black Ping Pong Rubber)
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(ai.x, ai.y, ai.width, ai.height);
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(ai.x + ai.width, ai.y, 3, ai.height);
+
+      // Render Ball Shadow on Table
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.beginPath();
+      ctx.ellipse(ball.x, ball.y, ball.radius, ball.radius * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Render Ball (Glow & Height Projection)
+      const renderY = ball.y - ball.z; // Elevate ball on screen based on height z
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(ball.x, renderY, ball.radius, 0, Math.PI * 2);
+      ctx.fill();
+      // Render Winner Screen when timer finishes
+if (gameOver) {
+  // Dark overlay
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Winner Box
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40);
+
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = '700 28px sans-serif';
+  ctx.fillText(winnerText, canvas.width / 2, canvas.height / 2 + 10);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '16px sans-serif';
+  ctx.fillText(`Final Score — Player: ${player.score} | AI: ${ai.score}`, canvas.width / 2, canvas.height / 2 + 50);
+}
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    resetBall(1);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
