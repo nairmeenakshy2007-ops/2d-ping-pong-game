@@ -3,7 +3,7 @@
 A 2D single-player ping pong game developed inside a single file using pure JavaScript, CSS3, and the HTML5 Canvas API. Built as part of the technical task submission for the AWS Student Builder Group core selection.
 
 ## 🕹️ Live Demo
-Play the game live here: [Insert Your GitHub Pages Link Here]
+Play the game live here: [https://nairmeenakshy2007-ops.github.io/2d-ping-pong-game/]
 
 ## 🎮 Controls & Gameplay
 - **Player Paddle:** Use `W` / `S` or `Up Arrow` / `Down Arrow` to move up and down.
